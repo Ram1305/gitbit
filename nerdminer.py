@@ -58,10 +58,17 @@ except Exception:
     font = font_b = font_lg = ImageFont.load_default()
 
 # ── Simulator imports (window created after PHASES so NFRAMES = len(PHASES)) ──
+_HAS_DISPLAY = bool(os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'))
+_HAS_TK      = False
 if SIMULATION_MODE:
-    import tkinter as tk
-    from PIL import ImageTk
     SCALE = 5
+    if _HAS_DISPLAY:
+        try:
+            import tkinter as tk
+            from PIL import ImageTk
+            _HAS_TK = True
+        except ImportError:
+            print("[headless] tkinter not installed — running without GUI")
 else:
     def show_frame(img, slot):
         disp.getbuffer(img)
@@ -666,25 +673,29 @@ PHASES = [
 
 # ── Simulator window — single 128x32 screen, mirrors the real OLED ─────────────
 if SIMULATION_MODE:
-    _tk_active = False
+    _tk_active    = False
     _current_photo = [None]
-    try:
-        root = tk.Tk()
-        root.title("NerdMiner OLED  [128x32 @ 5x]")
-        root.configure(bg="#111")
-        tk.Label(root, text="◉  NerdMiner OLED Simulator",
-                 fg="#aaa", bg="#111", font=("Courier", 10, "bold")).pack(
-                 anchor="w", padx=14, pady=(10, 2))
-        canvas = tk.Canvas(root, width=WIDTH * SCALE, height=HEIGHT * SCALE,
-                           bg="black", highlightthickness=2,
-                           highlightbackground="#444")
-        canvas.pack(padx=14, pady=(0, 4))
-        lbl_info = tk.Label(root, text="", fg="#555", bg="#111",
-                            font=("Courier", 8))
-        lbl_info.pack(anchor="w", padx=14, pady=(0, 10))
-        _tk_active = True
-    except Exception as _te:
-        print(f"[headless] no display ({_te}) — running without GUI")
+
+    if _HAS_TK:                          # only attempt GUI when tkinter imported OK
+        try:
+            root = tk.Tk()
+            root.title("NerdMiner OLED  [128x32 @ 5x]")
+            root.configure(bg="#111")
+            tk.Label(root, text="◉  NerdMiner OLED Simulator",
+                     fg="#aaa", bg="#111", font=("Courier", 10, "bold")).pack(
+                     anchor="w", padx=14, pady=(10, 2))
+            canvas = tk.Canvas(root, width=WIDTH * SCALE, height=HEIGHT * SCALE,
+                               bg="black", highlightthickness=2,
+                               highlightbackground="#444")
+            canvas.pack(padx=14, pady=(0, 4))
+            lbl_info = tk.Label(root, text="", fg="#555", bg="#111",
+                                font=("Courier", 8))
+            lbl_info.pack(anchor="w", padx=14, pady=(0, 10))
+            _tk_active = True
+        except Exception as _te:
+            print(f"[headless] GUI error ({_te}) — running without GUI")
+    else:
+        print("[headless] no display — running without GUI")
 
     if _tk_active:
         def show_frame(img, slot):
