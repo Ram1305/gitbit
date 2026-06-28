@@ -13,11 +13,21 @@ Full animation loop:
   Phase 7  HASHRATE  — hash rate + progress bar
 """
 import sys, os, time, json, urllib.request, threading
+import http.server, socket, urllib.parse, subprocess, shutil
 from PIL import Image, ImageDraw, ImageFont
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 IMG_DIR     = os.path.join(BASE_DIR, 'images')
-BTC_ADDRESS = "bc1qc7mjrxwqr4a6rdnmsa3gwp7n9vweg0n5yc24z8"
+CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
+
+# Load persisted settings; fall back to built-in defaults
+_DEFAULT_ADDR = "bc1qc7mjrxwqr4a6rdnmsa3gwp7n9vweg0n5yc24z8"
+try:
+    with open(CONFIG_FILE) as _f:
+        _saved = json.load(_f)
+except Exception:
+    _saved = {}
+BTC_ADDRESS = _saved.get('btc_address', _DEFAULT_ADDR)
 
 # ── Image filenames (spaces in names) ─────────────────────────────────────────
 F_WALK   = 'walking frames.png'             # 7 frames
@@ -207,6 +217,160 @@ def _fetch_loop():
 threading.Thread(target=_fetch_loop, daemon=True).start()
 
 
+# ── Web config portal ──────────────────────────────────────────────────────────
+CONFIG_PORT = 8080
+
+def _get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
+
+_HTML_PAGE = """\
+<!DOCTYPE html>
+<html>
+<head>
+<title>NerdMiner Setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:monospace;background:#0a0a0a;color:#e0e0e0;padding:24px;max-width:480px;margin:auto}}
+h1{{color:#f7931a;font-size:22px;margin-bottom:18px}}
+h2{{color:#aaa;font-size:13px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}}
+.card{{border:1px solid #2a2a2a;border-radius:8px;padding:18px;margin-bottom:16px;background:#111}}
+label{{color:#777;font-size:11px;display:block;margin-bottom:4px;margin-top:10px}}
+input{{background:#1a1a1a;color:#fff;border:1px solid #333;padding:10px;width:100%;border-radius:5px;font-size:13px}}
+input:focus{{outline:none;border-color:#f7931a}}
+.btn{{background:#f7931a;color:#000;border:none;padding:13px;width:100%;font-size:15px;font-weight:bold;border-radius:6px;cursor:pointer;margin-top:8px}}
+.btn:hover{{background:#e8860f}}
+.ok{{background:#0f2a0f;border:1px solid #2a6a2a;color:#4caf50;padding:12px;border-radius:6px;margin-bottom:16px}}
+.ip{{color:#444;font-size:11px;text-align:center;margin-top:20px}}
+</style>
+</head>
+<body>
+<h1>⛏ NerdMiner Setup</h1>
+{msg}
+<form method="POST" action="/save">
+  <div class="card">
+    <h2>₿ Bitcoin</h2>
+    <label>Wallet Address</label>
+    <input type="text" name="btc_address" value="{btc_address}" placeholder="bc1q..." required>
+  </div>
+  <div class="card">
+    <h2>📶 Wi-Fi</h2>
+    <label>Network Name (SSID)</label>
+    <input type="text" name="wifi_ssid" value="{wifi_ssid}" placeholder="MyHomeWiFi">
+    <label>Password</label>
+    <input type="password" name="wifi_password" placeholder="Leave blank to keep current">
+  </div>
+  <button class="btn" type="submit">💾  Save &amp; Apply</button>
+</form>
+<p class="ip">http://{ip}:{port}</p>
+</body>
+</html>"""
+
+def _save_cfg(btc_addr, wifi_ssid):
+    try:
+        existing = {}
+        try:
+            with open(CONFIG_FILE) as f:
+                existing = json.load(f)
+        except Exception:
+            pass
+        existing['btc_address'] = btc_addr
+        if wifi_ssid:
+            existing['wifi_ssid'] = wifi_ssid
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(existing, f, indent=2)
+    except Exception:
+        pass
+
+def _apply_wifi(ssid, password):
+    if not ssid:
+        return ''
+    if shutil.which('nmcli'):
+        try:
+            cmd = ['sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid]
+            if password:
+                cmd += ['password', password]
+            subprocess.run(cmd, timeout=15, check=True,
+                           capture_output=True)
+            return f'Connected to {ssid}'
+        except Exception as e:
+            return f'nmcli error: {e}'
+    # Fallback: append to wpa_supplicant.conf
+    try:
+        entry = (f'\nnetwork={{\n'
+                 f'    ssid="{ssid}"\n'
+                 f'    psk="{password}"\n'
+                 f'}}\n')
+        with open('/etc/wpa_supplicant/wpa_supplicant.conf', 'a') as f:
+            f.write(entry)
+        subprocess.run(['sudo', 'wpa_cli', '-i', 'wlan0', 'reconfigure'],
+                       timeout=10, check=False, capture_output=True)
+        return f'Added {ssid} — reboot to apply'
+    except Exception as e:
+        return f'wifi error: {e}'
+
+
+class _CfgHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_): pass
+
+    def _html(self, msg=''):
+        cfg = {}
+        try:
+            with open(CONFIG_FILE) as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+        return _HTML_PAGE.format(
+            msg=msg,
+            btc_address=cfg.get('btc_address', BTC_ADDRESS),
+            wifi_ssid=cfg.get('wifi_ssid', ''),
+            ip=_get_local_ip(), port=CONFIG_PORT)
+
+    def _send(self, body, code=200):
+        b = body.encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):
+        self._send(self._html())
+
+    def do_POST(self):
+        global BTC_ADDRESS
+        if self.path != '/save':
+            self._send('not found', 404); return
+        raw  = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        data = dict(urllib.parse.parse_qsl(raw.decode()))
+        if data.get('btc_address'):
+            BTC_ADDRESS = data['btc_address'].strip()
+        wifi_msg = _apply_wifi(data.get('wifi_ssid','').strip(),
+                               data.get('wifi_password','').strip())
+        _save_cfg(BTC_ADDRESS, data.get('wifi_ssid','').strip())
+        extra = f' &nbsp;·&nbsp; {wifi_msg}' if wifi_msg else ''
+        self._send(self._html(
+            f'<div class="ok">✔ Saved!{extra}</div>'))
+
+
+def _start_portal():
+    try:
+        srv = http.server.HTTPServer(('0.0.0.0', CONFIG_PORT), _CfgHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        print(f"Config portal → http://{_get_local_ip()}:{CONFIG_PORT}")
+    except Exception as e:
+        print(f"Config portal unavailable: {e}")
+
+_start_portal()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE RENDER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -373,7 +537,7 @@ def render_stats(t):
     ox = sep_x + 3
     draw.text((ox,  0), "BTC/USD", font=font_b, fill=255)
     draw.text((ox, 10), price,     font=font_b, fill=255)
-    bal_s = f"{bal:.6f} BTC" if bal is not None else "syncing wallet..."
+    bal_s = f"{bal:.6f} BTC" if bal is not None else "syncing..."
     draw.text((ox, 22), bal_s, font=font, fill=255)
     for i in range(3):                             # animated alive-dots top-right
         if (t // 6) % 4 == i:
