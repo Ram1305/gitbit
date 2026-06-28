@@ -70,7 +70,13 @@ if SIMULATION_MODE:
         except ImportError:
             print("[headless] tkinter not installed — running without GUI")
 else:
+    _last_hw_write = [0.0]
+
     def show_frame(img, slot):
+        now = time.time()
+        if now - _last_hw_write[0] < 0.25:   # cap OLED writes at 4 FPS
+            return
+        _last_hw_write[0] = now
         disp.getbuffer(img)
         disp.ShowImage()
 
