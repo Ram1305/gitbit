@@ -41,10 +41,11 @@ except Exception as e:
     print(f"Simulation mode: {e}")
 
 try:
-    font   = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 8)
-    font_b = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 8)
+    font    = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 8)
+    font_b  = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 8)
+    font_lg = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 16)
 except Exception:
-    font = font_b = ImageFont.load_default()
+    font = font_b = font_lg = ImageFont.load_default()
 
 # ── Simulator imports (window created after PHASES so NFRAMES = len(PHASES)) ──
 if SIMULATION_MODE:
@@ -350,22 +351,39 @@ def render_btc_price(t):
     img, draw = _new()
     with _lock:
         price = _btc_price
-    # Gem icon + separator (matches stats screen layout)
-    blit(img, GEM_ICON, 1, (HEIGHT - GEM_H) // 2)
-    sep_x = GEM_ICON.size[0] + 3
+
+    # ── Bitcoin coin logo (left) ───────────────────────────────────────────────
+    cx, cy, r = 14, 16, 12
+    # Outer ring — always visible
+    draw.ellipse([(cx - r,     cy - r),     (cx + r,     cy + r)    ], outline=255)
+    # Inner ring pulses — gives a "glowing coin" effect
+    if (t // 4) % 2 == 0:
+        draw.ellipse([(cx - r + 2, cy - r + 2), (cx + r - 2, cy + r - 2)], outline=255)
+    # "B" centred in the circle
+    bx, by = cx - 3, cy - 4
+    draw.text((bx, by), "B", font=font_b, fill=255)
+    # Two tick marks above and below the B → makes it look like ₿
+    for tx in (bx + 1, bx + 3):
+        draw.line([(tx, by - 2), (tx, by)     ], fill=255)
+        draw.line([(tx, by + 8), (tx, by + 10)], fill=255)
+
+    # ── Vertical separator ─────────────────────────────────────────────────────
+    sep_x = cx + r + 2
     draw.line([(sep_x, 0), (sep_x, HEIGHT - 1)], fill=255)
     ox = sep_x + 3
-    draw.text((ox,  0), "BTC / USD", font=font_b, fill=255)
-    draw.text((ox, 11), price,       font=font_b, fill=255)
-    # Animated dots bottom-left (alive indicator)
+
+    # ── Text (right side) ──────────────────────────────────────────────────────
+    draw.text((ox,  0), "BTC / USD", font=font_b,  fill=255)
+    draw.text((ox, 11), price,       font=font_lg, fill=255)   # large 16px price
+
+    # ── Sparkle top-right corner ───────────────────────────────────────────────
+    sparkle(draw, WIDTH - 5, 4, t, size=2)
+
+    # ── Alive dots bottom ──────────────────────────────────────────────────────
     for i in range(3):
         if (t // 6) % 4 == i:
             draw.point((ox + i * 4, HEIGHT - 2), fill=255)
-    # Pulsing arrow/chevron on right to suggest live feed
-    if (t // 8) % 2 == 0:
-        ax = WIDTH - 6
-        for dy in range(-3, 4):
-            draw.point((ax + abs(dy) - 3, HEIGHT // 2 + dy), fill=255)
+
     return img
 
 
