@@ -2,13 +2,15 @@
 """
 NerdMiner — PNG sprite-sheet cat mining animation for SSD1305 128x32 OLED
 
-Full animation loop (functionframe.png / animation_sequence.png):
-  Phase 0  MINING  — cat swings pickaxe at diamond LEFT  |  chest + sparkles RIGHT
-  Phase 1  PICKUP  — diamond slides LEFT→cat             |  chest RIGHT
-  Phase 2  RUNNING — cat dashes RIGHT carrying diamond   |  chest RIGHT
-  Phase 3  DEPOSIT — wallet interaction frames 1-5       |  gem flies in
-  Phase 4  HAPPY   — wallet frame 6 IDLE CHEST           |  burst sparkles
-  Phase 5  STATS   — BTC price / wallet balance dashboard
+Full animation loop:
+  Phase 0  MINING    — cat swings pickaxe at diamond LEFT  |  chest RIGHT
+  Phase 1  RUNNING   — cat dashes RIGHT carrying diamond   |  chest RIGHT
+  Phase 2  DEPOSIT   — wallet interaction frames 1-5
+  Phase 3  HAPPY     — wallet idle chest + burst sparkles
+  Phase 4  STATS     — BTC price / wallet balance
+  Phase 5  BLOCK!    — blocks found counter (0)
+  Phase 6  BTC PRICE — live BTC/USD price
+  Phase 7  HASHRATE  — hash rate + progress bar
 """
 import sys, os, time, json, urllib.request, threading
 from PIL import Image, ImageDraw, ImageFont
@@ -44,55 +46,11 @@ try:
 except Exception:
     font = font_b = ImageFont.load_default()
 
-# ── Simulator window ───────────────────────────────────────────────────────────
+# ── Simulator imports (window created after PHASES so NFRAMES = len(PHASES)) ──
 if SIMULATION_MODE:
     import tkinter as tk
     from PIL import ImageTk
-
-    SCALE   = 5
-    NFRAMES = 6
-    root    = tk.Tk()
-    root.title("NerdMiner OLED  [128x32 @ 5x]")
-    root.configure(bg="#111")
-    tk.Label(root, text="◉  NerdMiner OLED Simulator",
-             fg="#aaa", bg="#111", font=("Courier", 10, "bold")).pack(
-             anchor="w", padx=14, pady=(10, 2))
-    canvas = tk.Canvas(root, width=WIDTH * SCALE,
-                       height=HEIGHT * SCALE * NFRAMES,
-                       bg="black", highlightthickness=1,
-                       highlightbackground="#333")
-    canvas.pack(padx=14, pady=(0, 4))
-    lbl_info = tk.Label(root, text="", fg="#555", bg="#111",
-                        font=("Courier", 8))
-    lbl_info.pack(anchor="w", padx=14, pady=(0, 10))
-    _slot_photos = [None] * NFRAMES
-
-    def _separators():
-        for i in range(1, NFRAMES):
-            y = i * HEIGHT * SCALE
-            canvas.create_line(0, y, WIDTH * SCALE, y,
-                               fill="#1e1e1e", dash=(3, 5), tags="sep")
-
-    def show_frame(img, slot):
-        ph = ImageTk.PhotoImage(
-            img.resize((WIDTH * SCALE, HEIGHT * SCALE), Image.NEAREST))
-        _slot_photos[slot] = ph
-        tag = f"s{slot}"
-        canvas.delete(tag)
-        canvas.create_image(0, slot * HEIGHT * SCALE,
-                            anchor="nw", image=ph, tags=tag)
-        canvas.delete("sep")
-        _separators()
-
-    def update_info(text):
-        lbl_info.config(text=text)
-
-    def pump():
-        try:
-            root.update()
-        except tk.TclError:
-            sys.exit(0)
-
+    SCALE = 5
 else:
     _hw_slot = [0]
 
@@ -466,6 +424,51 @@ PHASES = [
     ("btcprice", render_btc_price,  30),
     ("hashrate", render_hashrate,   30),
 ]
+
+# ── Simulator window (created here so NFRAMES = len(PHASES) is correct) ───────
+if SIMULATION_MODE:
+    NFRAMES = len(PHASES)
+    root    = tk.Tk()
+    root.title("NerdMiner OLED  [128x32 @ 5x]")
+    root.configure(bg="#111")
+    tk.Label(root, text="◉  NerdMiner OLED Simulator",
+             fg="#aaa", bg="#111", font=("Courier", 10, "bold")).pack(
+             anchor="w", padx=14, pady=(10, 2))
+    canvas = tk.Canvas(root, width=WIDTH * SCALE,
+                       height=HEIGHT * SCALE * NFRAMES,
+                       bg="black", highlightthickness=1,
+                       highlightbackground="#333")
+    canvas.pack(padx=14, pady=(0, 4))
+    lbl_info = tk.Label(root, text="", fg="#555", bg="#111",
+                        font=("Courier", 8))
+    lbl_info.pack(anchor="w", padx=14, pady=(0, 10))
+    _slot_photos = [None] * NFRAMES
+
+    def _separators():
+        for i in range(1, NFRAMES):
+            y = i * HEIGHT * SCALE
+            canvas.create_line(0, y, WIDTH * SCALE, y,
+                               fill="#1e1e1e", dash=(3, 5), tags="sep")
+
+    def show_frame(img, slot):
+        ph = ImageTk.PhotoImage(
+            img.resize((WIDTH * SCALE, HEIGHT * SCALE), Image.NEAREST))
+        _slot_photos[slot] = ph
+        tag = f"s{slot}"
+        canvas.delete(tag)
+        canvas.create_image(0, slot * HEIGHT * SCALE,
+                            anchor="nw", image=ph, tags=tag)
+        canvas.delete("sep")
+        _separators()
+
+    def update_info(text):
+        lbl_info.config(text=text)
+
+    def pump():
+        try:
+            root.update()
+        except tk.TclError:
+            sys.exit(0)
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 print("NerdMiner OLED starting...")
