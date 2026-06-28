@@ -180,10 +180,10 @@ def _fetch_loop():
     while True:
         try:
             r = urllib.request.urlopen(
-                "https://api.coindesk.com/v1/bpi/currentprice/USD.json", timeout=5)
+                "https://mempool.space/api/v1/prices", timeout=5)
             d = json.loads(r.read().decode())
             with _lock:
-                _btc_price = f"${d['bpi']['USD']['rate_float']:,.0f}"
+                _btc_price = f"${d['USD']:,.0f}"
         except Exception:
             pass
         try:
