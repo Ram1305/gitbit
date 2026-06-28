@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 --version)",
+      "Bash(python --version)",
+      "PowerShell(python \"C:\\\\Users\\\\Jeyaram\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Jeyaram-Desktop-test\\\\b239bb48-452e-4b98-ad19-a9ca7d6c2db6\\\\scratchpad\\\\gen_sprites.py\")"
+    ]
+  }
+}

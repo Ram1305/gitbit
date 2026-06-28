@@ -1,0 +1,500 @@
+#!/usr/bin/env python3
+"""
+NerdMiner — PNG sprite-sheet cat mining animation for SSD1305 128x32 OLED
+
+Full animation loop (functionframe.png / animation_sequence.png):
+  Phase 0  MINING  — cat swings pickaxe at diamond LEFT  |  chest + sparkles RIGHT
+  Phase 1  PICKUP  — diamond slides LEFT→cat             |  chest RIGHT
+  Phase 2  RUNNING — cat dashes RIGHT carrying diamond   |  chest RIGHT
+  Phase 3  DEPOSIT — wallet interaction frames 1-5       |  gem flies in
+  Phase 4  HAPPY   — wallet frame 6 IDLE CHEST           |  burst sparkles
+  Phase 5  STATS   — BTC price / wallet balance dashboard
+"""
+import sys, os, time, json, urllib.request, threading
+from PIL import Image, ImageDraw, ImageFont
+
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+IMG_DIR     = os.path.join(BASE_DIR, 'images')
+BTC_ADDRESS = "bc1qc7mjrxwqr4a6rdnmsa3gwp7n9vweg0n5yc24z8"
+
+# ── Image filenames (spaces in names) ─────────────────────────────────────────
+F_WALK   = 'walking frames.png'             # 7 frames
+F_MINE   = 'mining frames.png'              # 4 frames
+F_CARRY  = 'carying diamond frames.png'     # 6 frames
+F_WALLET = 'wallet ineteraction frames.png' # 6 frames  32x32 each (wllet.png spec)
+F_ICONS  = 'icon and assets.png'            # 5 icons: diamond wallet pickaxe sparkle cat
+
+# ── Display ────────────────────────────────────────────────────────────────────
+SIMULATION_MODE = False
+try:
+    sys.path.append(os.path.join(BASE_DIR, 'drive'))
+    from drive import SSD1305
+    disp = SSD1305.SSD1305()
+    disp.Init()
+    disp.clear()
+    WIDTH, HEIGHT = disp.width, disp.height
+except Exception as e:
+    SIMULATION_MODE = True
+    WIDTH, HEIGHT = 128, 32
+    print(f"Simulation mode: {e}")
+
+try:
+    font   = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 8)
+    font_b = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 8)
+except Exception:
+    font = font_b = ImageFont.load_default()
+
+# ── Simulator window ───────────────────────────────────────────────────────────
+if SIMULATION_MODE:
+    import tkinter as tk
+    from PIL import ImageTk
+
+    SCALE   = 5
+    NFRAMES = 6
+    root    = tk.Tk()
+    root.title("NerdMiner OLED  [128x32 @ 5x]")
+    root.configure(bg="#111")
+    tk.Label(root, text="◉  NerdMiner OLED Simulator",
+             fg="#aaa", bg="#111", font=("Courier", 10, "bold")).pack(
+             anchor="w", padx=14, pady=(10, 2))
+    canvas = tk.Canvas(root, width=WIDTH * SCALE,
+                       height=HEIGHT * SCALE * NFRAMES,
+                       bg="black", highlightthickness=1,
+                       highlightbackground="#333")
+    canvas.pack(padx=14, pady=(0, 4))
+    lbl_info = tk.Label(root, text="", fg="#555", bg="#111",
+                        font=("Courier", 8))
+    lbl_info.pack(anchor="w", padx=14, pady=(0, 10))
+    _slot_photos = [None] * NFRAMES
+
+    def _separators():
+        for i in range(1, NFRAMES):
+            y = i * HEIGHT * SCALE
+            canvas.create_line(0, y, WIDTH * SCALE, y,
+                               fill="#1e1e1e", dash=(3, 5), tags="sep")
+
+    def show_frame(img, slot):
+        ph = ImageTk.PhotoImage(
+            img.resize((WIDTH * SCALE, HEIGHT * SCALE), Image.NEAREST))
+        _slot_photos[slot] = ph
+        tag = f"s{slot}"
+        canvas.delete(tag)
+        canvas.create_image(0, slot * HEIGHT * SCALE,
+                            anchor="nw", image=ph, tags=tag)
+        canvas.delete("sep")
+        _separators()
+
+    def update_info(text):
+        lbl_info.config(text=text)
+
+    def pump():
+        try:
+            root.update()
+        except tk.TclError:
+            sys.exit(0)
+
+else:
+    _hw_slot = [0]
+
+    def show_frame(img, slot):
+        if slot == _hw_slot[0]:
+            disp.getbuffer(img)
+            disp.ShowImage()
+
+    def update_info(_): pass
+    def pump(): pass
+
+
+# ── Sprite loaders ─────────────────────────────────────────────────────────────
+
+def _crop_scale(raw_L, target_h):
+    """Auto-crop black bg → scale to target_h with NEAREST → threshold to 1-bit."""
+    mask = raw_L.point(lambda p: 255 if p > 40 else 0)
+    bbox = mask.getbbox()
+    if bbox:
+        raw_L = raw_L.crop(bbox)
+    cw, ch = raw_L.size
+    nw     = max(1, round(cw * target_h / ch))
+    scaled = raw_L.resize((nw, target_h), Image.NEAREST)
+    return scaled.point(lambda p: 255 if p > 127 else 0, '1')
+
+
+def load_sheet(filename, n_frames, target_h):
+    """
+    Slice a horizontal sprite sheet into n_frames equal columns.
+    Each frame: auto-crop → scale to target_h → 1-bit.
+    Returns list of PIL '1'-mode images.
+    """
+    path  = os.path.join(IMG_DIR, filename)
+    sheet = Image.open(path).convert('L')
+    sw, sh = sheet.size
+    fw = sw // n_frames
+    return [_crop_scale(sheet.crop((i * fw, 0, (i + 1) * fw, sh)), target_h)
+            for i in range(n_frames)]
+
+
+# ── Sprite dimensions ──────────────────────────────────────────────────────────
+GROUND_Y = HEIGHT - 4   # y=28 — dotted ground line
+CAT_H    = GROUND_Y     # cat fills y=0 → y=28 (auto-cropped sprite scales to this)
+GEM_H    = 12           # diamond icon
+CHEST_H  = 18           # chest icon display height
+
+# ── Load all sprites ───────────────────────────────────────────────────────────
+WALK_FRAMES   = load_sheet(F_WALK,   7, CAT_H)
+# Flip horizontally so cat faces LEFT toward the diamond (confirmed by functionframe.png)
+MINE_FRAMES   = [f.transpose(Image.FLIP_LEFT_RIGHT) for f in load_sheet(F_MINE, 4, CAT_H)]
+CARRY_FRAMES  = load_sheet(F_CARRY,  6, CAT_H)
+WALLET_FRAMES = load_sheet(F_WALLET, 6, CAT_H)  # frames 0-5: deposit anim + idle chest
+
+_icons   = load_sheet(F_ICONS, 5, GEM_H)
+GEM_ICON  = _icons[0]                            # slot 0 = diamond
+PICK_ICON = _icons[2]                            # slot 2 = pickaxe
+
+# CHEST_ICON: last wallet frame (frame 6 = IDLE CHEST) scaled to CHEST_H.
+# This is the best-looking chest — used as static icon in phases 0-2 and 4.
+CHEST_ICON = load_sheet(F_WALLET, 6, CHEST_H)[5]
+
+
+# ── Layout ─────────────────────────────────────────────────────────────────────
+GEM_X    =  2
+GEM_Y    = GROUND_Y - GEM_H
+WALL_X   = WIDTH  - CHEST_ICON.size[0] - 2
+WALL_Y   = GROUND_Y - CHEST_ICON.size[1]
+CAT_Y    = 0
+CAT_HOME = 34   # cat x during mining/idle
+
+
+# ── Render helpers ─────────────────────────────────────────────────────────────
+
+def blit(canvas, sprite, x, y):
+    """Copy white pixels from 1-bit sprite onto canvas."""
+    sw, sh = sprite.size
+    px     = sprite.convert('L').load()
+    draw   = ImageDraw.Draw(canvas)
+    for row in range(sh):
+        for col in range(sw):
+            if px[col, row] > 127:
+                cx, cy = x + col, y + row
+                if 0 <= cx < WIDTH and 0 <= cy < HEIGHT:
+                    draw.point((cx, cy), fill=255)
+
+
+def sparkle(draw, cx, cy, t, size=2):
+    """Animated ✦: cross on even ticks, diagonals on odd. Animates with t."""
+    if t % 4 in (0, 2):
+        draw.line([(cx - size, cy), (cx + size, cy)], fill=255)
+        draw.line([(cx, cy - size), (cx, cy + size)], fill=255)
+    else:
+        s = max(1, size - 1)
+        for dx, dy in ((-s, -s), (s, -s), (-s, s), (s, s)):
+            draw.point((cx + dx, cy + dy), fill=255)
+
+
+def draw_ground(draw):
+    """Dotted ground line — matches oled_example.png."""
+    for x in range(0, WIDTH, 3):
+        draw.point((x, GROUND_Y), fill=255)
+
+
+def chest_idle(img, draw, t):
+    """
+    Static chest icon + two animated sparkles above it.
+    Used in phases 0, 1, 2 — matches wllet.png HOW IT LOOKS panel.
+    """
+    blit(img, CHEST_ICON, WALL_X, WALL_Y)
+    hw = CHEST_ICON.size[0]
+    sparkle(draw, WALL_X - 2,      WALL_Y - 4, t,     size=2)
+    sparkle(draw, WALL_X + hw + 1, WALL_Y - 5, t + 2, size=2)
+
+
+def _new():
+    img = Image.new('1', (WIDTH, HEIGHT), 0)
+    return img, ImageDraw.Draw(img)
+
+
+# ── Network data (background thread) ──────────────────────────────────────────
+_lock       = threading.Lock()
+_btc_price  = "..."
+_wallet_bal = None
+_hash_rate  = None           # kH/s — updated by _fetch_loop
+
+
+def _fetch_loop():
+    global _btc_price, _wallet_bal, _hash_rate
+    import math, random
+    while True:
+        try:
+            r = urllib.request.urlopen(
+                "https://api.coindesk.com/v1/bpi/currentprice/USD.json", timeout=5)
+            d = json.loads(r.read().decode())
+            with _lock:
+                _btc_price = f"${d['bpi']['USD']['rate_float']:,.0f}"
+        except Exception:
+            pass
+        try:
+            r = urllib.request.urlopen(
+                f"https://mempool.space/api/address/{BTC_ADDRESS}", timeout=6)
+            d = json.loads(r.read().decode())
+            s = d['chain_stats']
+            with _lock:
+                _wallet_bal = (s['funded_txo_sum'] - s['spent_txo_sum']) / 1e8
+        except Exception:
+            pass
+        # Simulate hash rate (replace with real miner API if available)
+        base = 54.0
+        noise = math.sin(time.time() / 30) * 8 + random.uniform(-3, 3)
+        with _lock:
+            _hash_rate = max(1.0, base + noise)
+        time.sleep(60)
+
+
+threading.Thread(target=_fetch_loop, daemon=True).start()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PHASE RENDER FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Phase 0 — MINING ──────────────────────────────────────────────────────────
+# functionframe.png steps 1-3: cat swings pickaxe at diamond on left
+# mining frames: [0] back-swing  [1] forward+sparks  [2] raise  [3] collect+glow
+
+def render_mining(t):
+    img, draw = _new()
+    draw_ground(draw)
+    fi = (t // 5) % len(MINE_FRAMES)
+    blit(img, MINE_FRAMES[fi], CAT_HOME, CAT_Y)
+    if fi in (1, 3):                               # impact / collect frames
+        # Cat faces LEFT — sparks appear between cat's left edge and diamond
+        sx = CAT_HOME - 4
+        for dx, dy in ((0, 0), (-2, -1), (1, -2), (-1, 1), (-3, -2)):
+            if 0 <= sx + dx < WIDTH:
+                draw.point((sx + dx, GEM_Y + dy), fill=255)
+    blit(img, GEM_ICON, GEM_X, GEM_Y)
+    chest_idle(img, draw, t)
+    return img
+
+
+# ── Phase 1 — PICKUP ──────────────────────────────────────────────────────────
+# functionframe.png step 4: diamond slides left→right toward cat
+
+def render_pickup(t, dur):
+    img, draw = _new()
+    draw_ground(draw)
+    blit(img, WALK_FRAMES[0], CAT_HOME, CAT_Y)    # static cat, no walk cycle
+    prog = t / max(dur - 1, 1)
+    gx   = int(GEM_X + (CAT_HOME - 2 - GEM_X) * prog)
+    blit(img, GEM_ICON, gx, GEM_Y)
+    chest_idle(img, draw, t)
+    return img
+
+
+# ── Phase 2 — RUNNING ─────────────────────────────────────────────────────────
+# functionframe.png step 5: cat dashes right carrying diamond; speed lines trail
+
+def render_run(t, dur):
+    img, draw = _new()
+    draw_ground(draw)
+    fi    = (t // 3) % len(CARRY_FRAMES)
+    prog  = t / max(dur - 1, 1)
+    dest  = WALL_X - CARRY_FRAMES[fi].size[0] - 2
+    cat_x = int(CAT_HOME + (dest - CAT_HOME) * prog)
+    blit(img, CARRY_FRAMES[fi], cat_x, CAT_Y)
+    for i in range(3):
+        lx = cat_x - 5 - i * 5
+        if lx > GEM_X + 12:
+            ly = CAT_Y + 10 + i * 4
+            draw.line([(lx, ly), (lx - 4, ly)], fill=255)
+    chest_idle(img, draw, t)
+    return img
+
+
+# ── Phase 3 — DEPOSIT ─────────────────────────────────────────────────────────
+# wallet interaction frames per wllet.png spec:
+#   WALLET_FRAMES[0] OPENING  → [1] PICK UP → [2] DEPOSIT 1
+#   WALLET_FRAMES[3] DEPOSIT 2 → [4] CLOSE   (frames 0-4 = cat+chest combined)
+#   WALLET_FRAMES[5] IDLE CHEST (used in phase 4)
+# Gem flies in from left during first half; sparkles build up after.
+
+def render_deposit(t, dur):
+    img, draw = _new()
+    draw_ground(draw)
+    fi   = min(t * 5 // max(dur, 1), 4)           # step through frames 0→4
+    sw   = WALLET_FRAMES[fi].size[0]
+    blit(img, WALLET_FRAMES[fi], WALL_X - sw, CAT_Y)
+    if t > dur // 3:
+        sparkle(draw, WALL_X + 5,  WALL_Y + 3,  t,     size=2)
+    if t > dur // 2:
+        sparkle(draw, WALL_X + 11, WALL_Y + 9,  t + 2, size=2)
+        sparkle(draw, WALL_X - 2,  WALL_Y + 5,  t + 1, size=2)
+    return img
+
+
+# ── Phase 4 — HAPPY ───────────────────────────────────────────────────────────
+# wllet.png spec & phase 4 panel: WALLET_FRAMES[5] = IDLE CHEST (frame 6)
+# Chest surrounded by burst sparkles at varied sizes and offsets.
+
+def render_happy(t):
+    img, draw = _new()
+    draw_ground(draw)
+    # Same CHEST_ICON (IDLE CHEST frame) used in phases 0-2 — burst sparkles around it
+    blit(img, CHEST_ICON, WALL_X, WALL_Y)
+    hw = CHEST_ICON.size[0]
+    sparkle(draw, WALL_X - 6,        WALL_Y - 4, t,     size=3)
+    sparkle(draw, WALL_X + hw + 5,   WALL_Y - 6, t + 1, size=3)
+    sparkle(draw, WALL_X + hw // 2,  WALL_Y - 8, t + 2, size=2)
+    sparkle(draw, WALL_X - 4,        WALL_Y + 10, t + 3, size=2)
+    sparkle(draw, WALL_X + hw + 3,   WALL_Y + 9,  t,    size=2)
+    return img
+
+
+# ── Phase 5 — STATS ───────────────────────────────────────────────────────────
+# dashboard_example.png: gem icon | vertical divider | BTC/USD price + balance | dots
+
+def render_stats(t):
+    img, draw = _new()
+    with _lock:
+        price, bal = _btc_price, _wallet_bal
+    blit(img, GEM_ICON, 1, (HEIGHT - GEM_H) // 2)
+    sep_x = GEM_ICON.size[0] + 3
+    draw.line([(sep_x, 0), (sep_x, HEIGHT - 1)], fill=255)
+    ox = sep_x + 3
+    draw.text((ox,  0), "BTC/USD", font=font_b, fill=255)
+    draw.text((ox, 10), price,     font=font_b, fill=255)
+    bal_s = f"{bal:.6f} BTC" if bal is not None else "syncing wallet..."
+    draw.text((ox, 22), bal_s, font=font, fill=255)
+    for i in range(3):                             # animated alive-dots top-right
+        if (t // 6) % 4 == i:
+            draw.point((WIDTH - 6 + i * 2, 2), fill=255)
+    return img
+
+
+def render_block_found(t):
+    img, draw = _new()
+    # Flashing border: full box ↔ top+bottom lines
+    if (t // 3) % 2 == 0:
+        draw.rectangle([(0, 0), (WIDTH - 1, HEIGHT - 1)], outline=255)
+    else:
+        draw.line([(0, 0),         (WIDTH - 1, 0)        ], fill=255)
+        draw.line([(0, HEIGHT - 1),(WIDTH - 1, HEIGHT - 1)], fill=255)
+    # Animated corner sparkles
+    sparkle(draw,  5,         5,          t,     size=2)
+    sparkle(draw,  WIDTH - 6, 5,          t + 2, size=2)
+    sparkle(draw,  5,         HEIGHT - 6, t + 1, size=2)
+    sparkle(draw,  WIDTH - 6, HEIGHT - 6, t + 3, size=2)
+    # Gem icon on left margin
+    blit(img, GEM_ICON, 3, (HEIGHT - GEM_H) // 2)
+    ox = GEM_ICON.size[0] + 7
+    # Three text rows
+    draw.text((ox,  1), "BLOCK FOUND!", font=font_b, fill=255)
+    draw.text((ox, 12), "Blocks:    0",  font=font_b, fill=255)
+    draw.text((ox, 22), "Solo mining!",  font=font,   fill=255)
+    return img
+
+
+def render_btc_price(t):
+    img, draw = _new()
+    with _lock:
+        price = _btc_price
+    # Gem icon + separator (matches stats screen layout)
+    blit(img, GEM_ICON, 1, (HEIGHT - GEM_H) // 2)
+    sep_x = GEM_ICON.size[0] + 3
+    draw.line([(sep_x, 0), (sep_x, HEIGHT - 1)], fill=255)
+    ox = sep_x + 3
+    draw.text((ox,  0), "BTC / USD", font=font_b, fill=255)
+    draw.text((ox, 11), price,       font=font_b, fill=255)
+    # Animated dots bottom-left (alive indicator)
+    for i in range(3):
+        if (t // 6) % 4 == i:
+            draw.point((ox + i * 4, HEIGHT - 2), fill=255)
+    # Pulsing arrow/chevron on right to suggest live feed
+    if (t // 8) % 2 == 0:
+        ax = WIDTH - 6
+        for dy in range(-3, 4):
+            draw.point((ax + abs(dy) - 3, HEIGHT // 2 + dy), fill=255)
+    return img
+
+
+def render_hashrate(t):
+    img, draw = _new()
+    with _lock:
+        hr = _hash_rate
+    # Pickaxe icon on left
+    blit(img, PICK_ICON, 1, (HEIGHT - PICK_ICON.size[1]) // 2)
+    sep_x = PICK_ICON.size[0] + 3
+    draw.line([(sep_x, 0), (sep_x, HEIGHT - 1)], fill=255)
+    ox = sep_x + 3
+    # Header
+    draw.text((ox,  0), "HASH RATE", font=font_b, fill=255)
+    # Rate value
+    if hr is not None:
+        if hr >= 1000:
+            rate_s = f"{hr / 1000:.2f} MH/s"
+        else:
+            rate_s = f"{hr:.1f} kH/s"
+    else:
+        rate_s = "-- kH/s"
+    draw.text((ox, 11), rate_s, font=font_b, fill=255)
+    # Animated progress bar showing relative rate (max ~150 kH/s)
+    bar_y  = 23
+    bar_x0 = ox
+    bar_x1 = WIDTH - 4
+    bar_w  = bar_x1 - bar_x0
+    draw.rectangle([(bar_x0, bar_y), (bar_x1, bar_y + 5)], outline=255)
+    if hr is not None:
+        fill_w = max(1, int(bar_w * min(hr / 150.0, 1.0)))
+        # Animated tick fills bar 1px at a time (bounces up/down)
+        disp_w = min(fill_w, bar_x0 + fill_w)
+        draw.rectangle([(bar_x0 + 1, bar_y + 1),
+                         (bar_x0 + disp_w - 1, bar_y + 4)], fill=255)
+    # Alive dots top-right
+    for i in range(3):
+        if (t // 6) % 4 == i:
+            draw.point((WIDTH - 6 + i * 2, 2), fill=255)
+    return img
+
+
+# ── Phase table ────────────────────────────────────────────────────────────────
+PHASES = [
+    ("mining ", render_mining,      30),
+    # ("pickup ", render_pickup,    20),
+    ("running", render_run,         25),
+    ("deposit", render_deposit,     25),
+    ("happy  ", render_happy,       30),
+    ("stats  ", render_stats,       30),
+    ("block! ", render_block_found, 30),
+    ("btcprice", render_btc_price,  30),
+    ("hashrate", render_hashrate,   30),
+]
+
+# ── Main loop ──────────────────────────────────────────────────────────────────
+print("NerdMiner OLED starting...")
+phase, tick = 0, 0
+cached_imgs = [None] * len(PHASES)
+
+while True:
+    label, fn, dur = PHASES[phase]
+    img = fn(tick, dur) if fn in (render_pickup, render_run, render_deposit) else fn(tick)
+    cached_imgs[phase] = img
+
+    if SIMULATION_MODE:
+        for i, fi in enumerate(cached_imgs):
+            if fi is not None:
+                show_frame(fi, i)
+        with _lock:
+            p, b = _btc_price, _wallet_bal
+        bal_s = f"{b:.6f} BTC" if b is not None else "fetching..."
+        update_info(
+            f"phase {phase} ({label})  t={tick:02d}/{dur-1:02d}"
+            f"   BTC {p}   wallet {bal_s}"
+        )
+        pump()
+    else:
+        show_frame(img, phase)
+
+    tick += 1
+    if tick >= dur:
+        tick  = 0
+        phase = (phase + 1) % len(PHASES)
+
+    time.sleep(0.1)
