@@ -215,6 +215,62 @@ threading.Thread(target=_fetch_loop, daemon=True).start()
 # functionframe.png steps 1-3: cat swings pickaxe at diamond on left
 # mining frames: [0] back-swing  [1] forward+sparks  [2] raise  [3] collect+glow
 
+def render_intro(t):
+    img, draw = _new()
+
+    # ═══ TOP HALF: white block, black content (inverted badge) ════════════════
+    draw.rectangle([(0, 0), (WIDTH - 1, 15)], fill=255)
+
+    # Measure "BITCOIN" to centre coin + text as a group
+    try:
+        bw = int(draw.textlength("BITCOIN", font=font_lg))
+    except Exception:
+        bw = 70
+    cr       = 7                            # coin radius
+    coin_d   = cr * 2                       # = 14
+    gap      = 4
+    total_w  = coin_d + gap + bw
+    start_x  = max(2, (WIDTH - total_w) // 2)
+    ccx      = start_x + cr                 # coin centre x
+
+    # Bitcoin coin — black outline on white background
+    draw.ellipse([(ccx - cr, 1), (ccx + cr, 15)], outline=0)
+    draw.text((ccx - 3, 4), "B", font=font_b, fill=0)
+    # Two tick marks → ₿ look
+    for tx in (ccx - 1, ccx + 1):
+        draw.line([(tx, 1),  (tx, 3) ], fill=0)
+        draw.line([(tx, 12), (tx, 14)], fill=0)
+
+    # "BITCOIN" in black to the right of the coin
+    draw.text((start_x + coin_d + gap, 0), "BITCOIN", font=font_lg, fill=0)
+
+    # Animated star top-right corner (black on white)
+    if (t // 3) % 2 == 0:
+        draw.line([(WIDTH - 7, 7), (WIDTH - 3, 7)], fill=0)
+        draw.line([(WIDTH - 5, 5), (WIDTH - 5, 9)], fill=0)
+    else:
+        for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+            draw.point((WIDTH - 5 + dx, 7 + dy), fill=0)
+
+    # ═══ BOTTOM HALF: black bg, white content ═════════════════════════════════
+    # Hard divider already visible as edge of white block; add a second line
+    draw.line([(0, 16), (WIDTH - 1, 16)], fill=255)
+
+    # "Merch" centred in white
+    try:
+        mw = int(draw.textlength("Merch", font=font_lg))
+    except Exception:
+        mw = 46
+    mx = max(2, (WIDTH - mw) // 2)
+    draw.text((mx, 17), "Merch", font=font_lg, fill=255)
+
+    # Flanking sparkles either side of "Merch"
+    sparkle(draw, max(3,         mx - 6),      25, t,     size=2)
+    sparkle(draw, min(WIDTH - 4, mx + mw + 5), 25, t + 2, size=2)
+
+    return img
+
+
 def render_mining(t):
     img, draw = _new()
     draw_ground(draw)
@@ -428,6 +484,7 @@ def render_hashrate(t):
 
 # ── Phase table ────────────────────────────────────────────────────────────────
 PHASES = [
+    ("intro  ", render_intro,       40),   # splash — shown on first boot
     ("mining ", render_mining,      30),
     # ("pickup ", render_pickup,    20),
     ("running", render_run,         25),
