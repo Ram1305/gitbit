@@ -133,16 +133,15 @@ CAT_HOME = 34   # cat x during mining/idle
 # ── Render helpers ─────────────────────────────────────────────────────────────
 
 def blit(canvas, sprite, x, y):
-    """Copy white pixels from 1-bit sprite onto canvas."""
+    """Copy white pixels from 1-bit sprite onto canvas using PIL paste (fast)."""
     sw, sh = sprite.size
-    px     = sprite.convert('L').load()
-    draw   = ImageDraw.Draw(canvas)
-    for row in range(sh):
-        for col in range(sw):
-            if px[col, row] > 127:
-                cx, cy = x + col, y + row
-                if 0 <= cx < WIDTH and 0 <= cy < HEIGHT:
-                    draw.point((cx, cy), fill=255)
+    # Clip sprite to display bounds
+    sx0, sy0 = max(0, -x),        max(0, -y)
+    sx1, sy1 = min(sw, WIDTH - x), min(sh, HEIGHT - y)
+    if sx1 <= sx0 or sy1 <= sy0:
+        return
+    s = sprite.crop((sx0, sy0, sx1, sy1)) if (sx0 or sy0 or sx1 < sw or sy1 < sh) else sprite
+    canvas.paste(s, (max(0, x), max(0, y)), mask=s.convert('L'))
 
 
 def sparkle(draw, cx, cy, t, size=2):
@@ -223,6 +222,7 @@ CONFIG_PORT = 8080
 def _get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(2)
         s.connect(('8.8.8.8', 80))
         ip = s.getsockname()[0]
         s.close()
@@ -361,12 +361,16 @@ class _CfgHandler(http.server.BaseHTTPRequestHandler):
 
 
 def _start_portal():
-    try:
-        srv = http.server.HTTPServer(('0.0.0.0', CONFIG_PORT), _CfgHandler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        print(f"Config portal → http://{_get_local_ip()}:{CONFIG_PORT}")
-    except Exception as e:
-        print(f"Config portal unavailable: {e}")
+    def _serve():
+        try:
+            class _Server(http.server.HTTPServer):
+                allow_reuse_address = True   # avoid "Address already in use" on restart
+            srv = _Server(('0.0.0.0', CONFIG_PORT), _CfgHandler)
+            print(f"Config portal → http://{_get_local_ip()}:{CONFIG_PORT}")
+            srv.serve_forever()
+        except Exception as e:
+            print(f"Config portal unavailable: {e}")
+    threading.Thread(target=_serve, daemon=True).start()   # returns immediately
 
 _start_portal()
 
