@@ -427,48 +427,60 @@ PHASES = [
 
 # ── Simulator window (created here so NFRAMES = len(PHASES) is correct) ───────
 if SIMULATION_MODE:
-    NFRAMES = len(PHASES)
-    root    = tk.Tk()
-    root.title("NerdMiner OLED  [128x32 @ 5x]")
-    root.configure(bg="#111")
-    tk.Label(root, text="◉  NerdMiner OLED Simulator",
-             fg="#aaa", bg="#111", font=("Courier", 10, "bold")).pack(
-             anchor="w", padx=14, pady=(10, 2))
-    canvas = tk.Canvas(root, width=WIDTH * SCALE,
-                       height=HEIGHT * SCALE * NFRAMES,
-                       bg="black", highlightthickness=1,
-                       highlightbackground="#333")
-    canvas.pack(padx=14, pady=(0, 4))
-    lbl_info = tk.Label(root, text="", fg="#555", bg="#111",
-                        font=("Courier", 8))
-    lbl_info.pack(anchor="w", padx=14, pady=(0, 10))
+    NFRAMES   = len(PHASES)
     _slot_photos = [None] * NFRAMES
+    _tk_active = False
+    try:
+        root = tk.Tk()
+        root.title("NerdMiner OLED  [128x32 @ 5x]")
+        root.configure(bg="#111")
+        tk.Label(root, text="◉  NerdMiner OLED Simulator",
+                 fg="#aaa", bg="#111", font=("Courier", 10, "bold")).pack(
+                 anchor="w", padx=14, pady=(10, 2))
+        canvas = tk.Canvas(root, width=WIDTH * SCALE,
+                           height=HEIGHT * SCALE * NFRAMES,
+                           bg="black", highlightthickness=1,
+                           highlightbackground="#333")
+        canvas.pack(padx=14, pady=(0, 4))
+        lbl_info = tk.Label(root, text="", fg="#555", bg="#111",
+                            font=("Courier", 8))
+        lbl_info.pack(anchor="w", padx=14, pady=(0, 10))
+        _tk_active = True
+    except Exception as _te:
+        print(f"[headless] no display ({_te}) — running without GUI")
 
-    def _separators():
-        for i in range(1, NFRAMES):
-            y = i * HEIGHT * SCALE
-            canvas.create_line(0, y, WIDTH * SCALE, y,
-                               fill="#1e1e1e", dash=(3, 5), tags="sep")
+    if _tk_active:
+        def _separators():
+            for i in range(1, NFRAMES):
+                y = i * HEIGHT * SCALE
+                canvas.create_line(0, y, WIDTH * SCALE, y,
+                                   fill="#1e1e1e", dash=(3, 5), tags="sep")
 
-    def show_frame(img, slot):
-        ph = ImageTk.PhotoImage(
-            img.resize((WIDTH * SCALE, HEIGHT * SCALE), Image.NEAREST))
-        _slot_photos[slot] = ph
-        tag = f"s{slot}"
-        canvas.delete(tag)
-        canvas.create_image(0, slot * HEIGHT * SCALE,
-                            anchor="nw", image=ph, tags=tag)
-        canvas.delete("sep")
-        _separators()
+        def show_frame(img, slot):
+            ph = ImageTk.PhotoImage(
+                img.resize((WIDTH * SCALE, HEIGHT * SCALE), Image.NEAREST))
+            _slot_photos[slot] = ph
+            tag = f"s{slot}"
+            canvas.delete(tag)
+            canvas.create_image(0, slot * HEIGHT * SCALE,
+                                anchor="nw", image=ph, tags=tag)
+            canvas.delete("sep")
+            _separators()
 
-    def update_info(text):
-        lbl_info.config(text=text)
+        def update_info(text):
+            lbl_info.config(text=text)
 
-    def pump():
-        try:
-            root.update()
-        except tk.TclError:
-            sys.exit(0)
+        def pump():
+            try:
+                root.update()
+            except tk.TclError:
+                sys.exit(0)
+    else:
+        def show_frame(img, slot): pass
+        def update_info(text):
+            if text:
+                print(f"\r{text}", end="", flush=True)
+        def pump(): pass
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 print("NerdMiner OLED starting...")
