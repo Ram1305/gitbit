@@ -52,12 +52,9 @@ if SIMULATION_MODE:
     from PIL import ImageTk
     SCALE = 5
 else:
-    _hw_slot = [0]
-
     def show_frame(img, slot):
-        if slot == _hw_slot[0]:
-            disp.getbuffer(img)
-            disp.ShowImage()
+        disp.getbuffer(img)
+        disp.ShowImage()
 
     def update_info(_): pass
     def pump(): pass
@@ -335,18 +332,17 @@ def render_block_found(t):
     else:
         draw.line([(0, 0),         (WIDTH - 1, 0)        ], fill=255)
         draw.line([(0, HEIGHT - 1),(WIDTH - 1, HEIGHT - 1)], fill=255)
-    # Animated corner sparkles
-    sparkle(draw,  5,         5,          t,     size=2)
-    sparkle(draw,  WIDTH - 6, 5,          t + 2, size=2)
-    sparkle(draw,  5,         HEIGHT - 6, t + 1, size=2)
-    sparkle(draw,  WIDTH - 6, HEIGHT - 6, t + 3, size=2)
-    # Gem icon on left margin
-    blit(img, GEM_ICON, 3, (HEIGHT - GEM_H) // 2)
-    ox = GEM_ICON.size[0] + 7
-    # Three text rows
-    draw.text((ox,  1), "BLOCK FOUND!", font=font_b, fill=255)
-    draw.text((ox, 12), "Blocks:    0",  font=font_b, fill=255)
-    draw.text((ox, 22), "Solo mining!",  font=font,   fill=255)
+    # size=1 sparkles stay within 3px of each corner — no overlap with text
+    sparkle(draw,  3,         3,          t,     size=1)
+    sparkle(draw,  WIDTH - 4, 3,          t + 2, size=1)
+    sparkle(draw,  3,         HEIGHT - 4, t + 1, size=1)
+    sparkle(draw,  WIDTH - 4, HEIGHT - 4, t + 3, size=1)
+    # Thin separator divides heading from stats
+    draw.line([(0, 10), (WIDTH - 1, 10)], fill=255)
+    # All text at x=8 — clear of the 3px corner sparkles on both sides
+    draw.text(( 8,  1), "BLOCK FOUND!", font=font_b, fill=255)
+    draw.text(( 8, 12), "Blocks:  0",   font=font_b, fill=255)
+
     return img
 
 
@@ -425,11 +421,10 @@ PHASES = [
     ("hashrate", render_hashrate,   30),
 ]
 
-# ── Simulator window (created here so NFRAMES = len(PHASES) is correct) ───────
+# ── Simulator window — single 128x32 screen, mirrors the real OLED ─────────────
 if SIMULATION_MODE:
-    NFRAMES   = len(PHASES)
-    _slot_photos = [None] * NFRAMES
     _tk_active = False
+    _current_photo = [None]
     try:
         root = tk.Tk()
         root.title("NerdMiner OLED  [128x32 @ 5x]")
@@ -437,10 +432,9 @@ if SIMULATION_MODE:
         tk.Label(root, text="◉  NerdMiner OLED Simulator",
                  fg="#aaa", bg="#111", font=("Courier", 10, "bold")).pack(
                  anchor="w", padx=14, pady=(10, 2))
-        canvas = tk.Canvas(root, width=WIDTH * SCALE,
-                           height=HEIGHT * SCALE * NFRAMES,
-                           bg="black", highlightthickness=1,
-                           highlightbackground="#333")
+        canvas = tk.Canvas(root, width=WIDTH * SCALE, height=HEIGHT * SCALE,
+                           bg="black", highlightthickness=2,
+                           highlightbackground="#444")
         canvas.pack(padx=14, pady=(0, 4))
         lbl_info = tk.Label(root, text="", fg="#555", bg="#111",
                             font=("Courier", 8))
@@ -450,22 +444,12 @@ if SIMULATION_MODE:
         print(f"[headless] no display ({_te}) — running without GUI")
 
     if _tk_active:
-        def _separators():
-            for i in range(1, NFRAMES):
-                y = i * HEIGHT * SCALE
-                canvas.create_line(0, y, WIDTH * SCALE, y,
-                                   fill="#1e1e1e", dash=(3, 5), tags="sep")
-
         def show_frame(img, slot):
             ph = ImageTk.PhotoImage(
                 img.resize((WIDTH * SCALE, HEIGHT * SCALE), Image.NEAREST))
-            _slot_photos[slot] = ph
-            tag = f"s{slot}"
-            canvas.delete(tag)
-            canvas.create_image(0, slot * HEIGHT * SCALE,
-                                anchor="nw", image=ph, tags=tag)
-            canvas.delete("sep")
-            _separators()
+            _current_photo[0] = ph
+            canvas.delete("all")
+            canvas.create_image(0, 0, anchor="nw", image=ph)
 
         def update_info(text):
             lbl_info.config(text=text)
@@ -479,33 +463,29 @@ if SIMULATION_MODE:
         def show_frame(img, slot): pass
         def update_info(text):
             if text:
-                print(f"\r{text}", end="", flush=True)
+                print(text, flush=True)
         def pump(): pass
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 print("NerdMiner OLED starting...")
 phase, tick = 0, 0
-cached_imgs = [None] * len(PHASES)
 
 while True:
     label, fn, dur = PHASES[phase]
-    img = fn(tick, dur) if fn in (render_pickup, render_run, render_deposit) else fn(tick)
-    cached_imgs[phase] = img
+    img = fn(tick, dur) if fn in (render_run, render_deposit) else fn(tick)
+
+    # Push current frame — hardware: OLED; simulation: single window
+    show_frame(img, phase)
 
     if SIMULATION_MODE:
-        for i, fi in enumerate(cached_imgs):
-            if fi is not None:
-                show_frame(fi, i)
         with _lock:
             p, b = _btc_price, _wallet_bal
         bal_s = f"{b:.6f} BTC" if b is not None else "fetching..."
         update_info(
-            f"phase {phase} ({label})  t={tick:02d}/{dur-1:02d}"
+            f"phase {phase} ({label.strip()})  t={tick:02d}/{dur-1:02d}"
             f"   BTC {p}   wallet {bal_s}"
         )
         pump()
-    else:
-        show_frame(img, phase)
 
     tick += 1
     if tick >= dur:
