@@ -38,16 +38,15 @@ F_ICONS  = 'icon and assets.png'            # 5 icons: diamond wallet pickaxe sp
 
 # ── Display ────────────────────────────────────────────────────────────────────
 SIMULATION_MODE = False
+WIDTH, HEIGHT = 128, 32
 try:
-    sys.path.append(os.path.join(BASE_DIR, 'drive'))
-    from drive import SSD1305
-    disp = SSD1305.SSD1305()
-    disp.Init()
-    disp.clear()
-    WIDTH, HEIGHT = disp.width, disp.height
+    from luma.core.interface.serial import spi
+    from luma.oled.device import ssd1306
+    _serial = spi(port=0, device=0)
+    disp = ssd1306(_serial, width=128, height=32)
+    print("OLED hardware mode enabled (SSD1306 via luma)")
 except Exception as e:
     SIMULATION_MODE = True
-    WIDTH, HEIGHT = 128, 32
     print(f"Simulation mode: {e}")
 
 try:
@@ -74,11 +73,10 @@ else:
 
     def show_frame(img, slot):
         now = time.time()
-        if now - _last_hw_write[0] < 0.25:   # cap OLED writes at 4 FPS
+        if now - _last_hw_write[0] < 0.05:   # cap at ~20 FPS
             return
         _last_hw_write[0] = now
-        disp.getbuffer(img)
-        disp.ShowImage()
+        disp.display(img.convert("1"))
 
     def update_info(_): pass
     def pump(): pass
@@ -667,7 +665,7 @@ def render_hashrate(t):
 PHASES = [
     ("intro  ", render_intro,       40),   # splash — shown on first boot
     ("mining ", render_mining,      30),
-    # ("pickup ", render_pickup,    20),
+    ("pickup ", render_pickup,      20),
     ("running", render_run,         25),
     ("deposit", render_deposit,     25),
     ("happy  ", render_happy,       30),
@@ -732,7 +730,7 @@ phase, tick = 0, 0
 
 while True:
     label, fn, dur = PHASES[phase]
-    img = fn(tick, dur) if fn in (render_run, render_deposit) else fn(tick)
+    img = fn(tick, dur) if fn in (render_run, render_deposit, render_pickup) else fn(tick)
 
     # Push current frame — hardware: OLED; simulation: single window
     show_frame(img, phase)
